@@ -1,0 +1,11 @@
+# 统一换行，避免 Windows 与 macOS/Linux 之间产生幽灵 diff。
+# 生成的数据文件（data/*.json、data/*.js）同样按文本处理并统一为 LF。
+* text=auto eol=lf
+
+# Windows 批处理必须保留 CRLF，否则 cmd 解析可能出错。
+*.bat text eol=crlf
+
+# 二进制资源不做任何转换。
+*.png binary
+*.jpg binary
+*.ico binary
