@@ -1,0 +1,21 @@
+# 采集中间产物：体积大或每次运行都会重写，不进版本库
+data/raw_repos.json
+data/verify_cache.json
+data/jsdelivr_cache.json
+data/_recheck_targets.txt
+
+# 站点构建产物
+_site/
+
+# 本地临时文件
+qa/
+*.log
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vscode/
+.idea/

@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SkillAtlas · AI Skills 聚合发现平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <a class="brand" href="#top">
+      <span class="brand-mark"><i></i><i></i><i></i></span>
+      <span class="brand-text">Skill<span>Atlas</span><small>AI SKILLS INDEX</small></span>
+    </a>
+    <nav class="nav">
+      <p class="nav-label">探索</p>
+      <button class="nav-item" data-jump="fresh"><b>✦</b>实时雷达 <em>LIVE</em></button>
+      <button class="nav-item active" data-jump="daily"><b>◈</b>今日推荐</button>
+      <button class="nav-item" data-jump="ranking"><b>↗</b>趋势榜单</button>
+      <button class="nav-item" data-jump="categories"><b>◫</b>技能分类</button>
+      <button class="nav-item" data-jump="browse"><b>▦</b>全部 Skills</button>
+      <button class="nav-item" data-jump="personalize"><b>◎</b>我的偏好</button>
+      <p class="nav-label">数据</p>
+      <button class="nav-item" data-jump="about"><b>ⓘ</b>数据来源与核验</button>
+    </nav>
+    <div class="side-foot">
+      <div class="source-card">
+        <span class="live"></span>
+        <b>数据实时采集自 GitHub</b>
+        <p id="sideMeta">正在读取数据集…</p>
+        <button id="refreshData">重新载入数据集</button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main" id="top">
+    <header class="topbar">
+      <div class="crumb"><span>SkillAtlas</span><i>/</i>GitHub Skills Index</div>
+      <div class="topbar-right">
+        <div class="search">
+          <span>⌕</span>
+          <input id="searchInput" placeholder="搜索 Skill、作者、关键词或 topic…" autocomplete="off" />
+          <kbd>/</kbd>
+        </div>
+        <a class="gh-link" id="repoLink" href="https://github.com" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+    </header>
+
+    <div class="wrap">
+      <section class="stats" id="stats"></section>
+
+      <section class="pulse-strip" id="pulseStrip" aria-live="polite">
+        <div class="pulse-status"><span class="pulse-orb"></span><div><b>GitHub 实时脉冲</b><small id="pulseText">正在连接公开 API…</small></div></div>
+        <div class="pulse-metrics"><span><strong id="pulseNew">—</strong><small>本次新发现</small></span><span><strong id="pulseHot">—</strong><small>24h 热度</small></span><span><strong id="pulseLatency">—</strong><small>响应</small></span></div>
+        <button class="sync-btn" id="syncNow"><span>↻</span> 立即同步</button>
+      </section>
+
+      <section class="control-dock" id="personalize">
+        <div class="dock-copy"><span class="kicker">YOUR RADAR</span><h2>把发现调成你的频率</h2><p id="preferenceSummary">选择你正在做的事，推荐会按你的偏好重新排序。</p></div>
+        <div class="preference-group" id="goalChoices" aria-label="工作目标">
+          <span class="group-label">我今天要</span>
+          <button class="preference active" data-goal="build">构建产品</button><button class="preference" data-goal="research">做研究</button><button class="preference" data-goal="create">做内容</button><button class="preference" data-goal="automate">自动化</button>
+        </div>
+        <div class="preference-group" id="prefChoices" aria-label="偏好分类">
+          <span class="group-label">偏好</span><button class="preference active" data-pref="编程开发">编程开发</button><button class="preference" data-pref="科研学术">科研学术</button><button class="preference" data-pref="浏览器自动化">浏览器自动化</button><button class="preference" data-pref="设计创意">设计创意</button>
+        </div>
+      </section>
+
+      <section class="block fresh-block" id="fresh">
+        <div class="block-head"><div><span class="kicker">FRESH SIGNAL</span><h2>刚刚发生</h2><p>来自 GitHub 的最新变化，按新鲜度和增长速度排序</p></div><button class="link-btn" data-jump="ranking">看完整趋势 <span>→</span></button></div>
+        <div class="fresh-layout"><div class="fresh-feed" id="freshFeed"></div><aside class="why-panel"><span class="kicker">WHY THIS</span><h3>推荐不是随机的。</h3><p>我们把星标增速、最近 push、技能文件数量和你的偏好组合成一个可解释分数。</p><div class="why-meter"><span><i></i></span><b id="personalScore">82</b><small>匹配度</small></div><button class="link-btn" data-jump="personalize">调整偏好 <span>→</span></button></aside></div>
+      </section>
+
+      <section class="block" id="daily">
+        <div class="block-head">
+          <div>
+            <span class="kicker">DAILY PICK</span>
+            <h2>今日推荐</h2>
+            <p id="dailyNote">按日期从已核验的 Skills 中轮换</p>
+          </div>
+          <button class="link-btn" data-shuffle="1">换一批 <span>↻</span></button>
+        </div>
+        <div class="daily-grid" id="dailyGrid"></div>
+      </section>
+
+      <section class="block" id="ranking">
+        <div class="block-head">
+          <div>
+            <span class="kicker">TRENDING</span>
+            <h2>趋势榜单</h2>
+            <p>综合星标、增长速率、活跃度与 Fork 计算</p>
+          </div>
+          <div class="seg" id="rankSeg">
+            <button class="active" data-rank="trend">趋势</button>
+            <button data-rank="stars">星标</button>
+            <button data-rank="recent">最近更新</button>
+            <button data-rank="skills">技能数</button>
+          </div>
+        </div>
+        <div class="rank-table" id="rankTable"></div>
+      </section>
+
+      <section class="block" id="categories">
+        <div class="block-head">
+          <div>
+            <span class="kicker">CATEGORIES</span>
+            <h2>技能分类</h2>
+            <p>基于仓库名称、描述与 topic 自动归类</p>
+          </div>
+        </div>
+        <div class="cat-grid" id="catGrid"></div>
+      </section>
+
+      <section class="block" id="browse">
+        <div class="block-head">
+          <div>
+            <span class="kicker">ALL SKILLS</span>
+            <h2>全部 Skills</h2>
+            <p id="browseNote"></p>
+          </div>
+          <div class="sort-wrap">
+            <label for="sortSelect">排序</label>
+            <select id="sortSelect">
+              <option value="personal">为我推荐</option>
+              <option value="trend">趋势优先</option>
+              <option value="stars">星标最多</option>
+              <option value="recent">最近更新</option>
+              <option value="new">最新创建</option>
+              <option value="skills">技能数最多</option>
+              <option value="name">名称 A→Z</option>
+            </select>
+          </div>
+        </div>
+        <div class="filter-row">
+          <div class="chips" id="catChips"></div>
+          <label class="toggle"><input type="checkbox" id="skillOnly" /><span>仅 Skills 仓库</span></label>
+          <label class="toggle"><input type="checkbox" id="verifiedOnly" /><span>只看已核验 SKILL.md</span></label>
+        </div>
+        <div class="cards" id="cards"></div>
+        <div class="more-wrap"><button class="more" id="loadMore">加载更多</button></div>
+      </section>
+
+      <section class="block" id="about">
+        <div class="block-head">
+          <div>
+            <span class="kicker">DATA</span>
+            <h2>数据来源与核验</h2>
+          </div>
+        </div>
+        <div class="about-grid" id="aboutGrid"></div>
+      </section>
+
+      <footer class="foot">
+        <span>SkillAtlas · 数据来自 GitHub Search API 与 Git Tree API</span>
+        <span id="footStamp"></span>
+      </footer>
+    </div>
+  </main>
+</div>
+
+<div class="modal" id="modal">
+  <div class="modal-card">
+    <button class="modal-x" id="modalX">×</button>
+    <div id="modalBody"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="./data/skills.js" onerror="window.__SKILL_DATA_MISSING__=1"></script>
+<script src="./main.js"></script>
+</body>
+</html>
