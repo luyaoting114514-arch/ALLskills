@@ -20,11 +20,13 @@ import os
 import re
 import socket
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -64,7 +66,23 @@ SEARCH_QUERIES: list[tuple[str, str, int]] = [
     ("topic:awesome-claude-skills", "stars", 2),
 ]
 
+# Search pacing depends on the quota we actually have: anonymous tokens allow
+# 10 search requests/minute, an authenticated token allows 30. Sleeping 7.2s
+# between calls when a token is present wastes roughly two thirds of the run.
+SEARCH_PAUSE = 2.2 if TOKEN else 7.2
+
 RATE = {"search_remaining": 10, "search_reset": 0.0, "core_remaining": 60, "core_reset": 0.0}
+RATE_LOCK = threading.Lock()
+
+
+def rate_get(key: str) -> float:
+    with RATE_LOCK:
+        return RATE[key]
+
+
+def rate_set(**kwargs) -> None:
+    with RATE_LOCK:
+        RATE.update(kwargs)
 
 
 def log(message: str) -> None:
@@ -81,30 +99,33 @@ def api_get(url: str, bucket: str, timeout: int = 20, retries: int = 2):
     remaining_key = f"{bucket}_remaining"
     reset_key = f"{bucket}_reset"
     for attempt in range(retries):
-        if RATE[remaining_key] <= 1:
-            log(f"  [rate] {bucket} exhausted, waiting {max(RATE[reset_key] - time.time(), 0):.0f}s")
-            sleep_until(RATE[reset_key])
+        if rate_get(remaining_key) <= 1:
+            log(f"  [rate] {bucket} exhausted, waiting {max(rate_get(reset_key) - time.time(), 0):.0f}s")
+            sleep_until(rate_get(reset_key))
             if bucket == "search":
                 time.sleep(2.0)  # let the window roll over before retrying
-            RATE[remaining_key] = 5 if bucket == "search" else 50
+            rate_set(**{remaining_key: 5 if bucket == "search" else 50})
         request = urllib.request.Request(url, headers=HEADERS)
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 body = response.read()
+                updates = {}
                 if response.headers.get("x-ratelimit-remaining") is not None:
-                    RATE[remaining_key] = int(response.headers["x-ratelimit-remaining"])
+                    updates[remaining_key] = int(response.headers["x-ratelimit-remaining"])
                 if response.headers.get("x-ratelimit-reset") is not None:
-                    RATE[reset_key] = float(response.headers["x-ratelimit-reset"])
+                    updates[reset_key] = float(response.headers["x-ratelimit-reset"])
+                if updates:
+                    rate_set(**updates)
                 return json.loads(body.decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return "404"
             if exc.code in (403, 429):
                 if exc.headers.get("x-ratelimit-reset"):
-                    RATE[reset_key] = float(exc.headers["x-ratelimit-reset"])
-                RATE[remaining_key] = 0
+                    rate_set(**{reset_key: float(exc.headers["x-ratelimit-reset"])})
+                rate_set(**{remaining_key: 0})
                 log(f"  [rate] {exc.code} on {bucket} (attempt {attempt + 1}/{retries})")
-                sleep_until(RATE[reset_key])
+                sleep_until(rate_get(reset_key))
                 if bucket == "search":
                     time.sleep(2.0)
                 continue
@@ -135,9 +156,9 @@ def phase_search(pages: int, min_stars: int) -> dict:
     for query, sort, query_pages in SEARCH_QUERIES:
         for page in range(1, min(query_pages, pages) + 1):
             if request_index:
-                # 10 search requests/minute unauthenticated; keep a safety margin
-                # so a query is never skipped by a stale reset timestamp.
-                time.sleep(7.2)
+                # Keep a margin below the real quota so a query is never skipped
+                # by a stale reset timestamp.
+                time.sleep(SEARCH_PAUSE)
             request_index += 1
             url = (
                 "https://api.github.com/search/repositories"
@@ -198,7 +219,7 @@ def is_skill_file(path) -> bool:
 
 
 def phase_verify(budget: int, min_stars: int, recheck: bool = False, recheck_below: int = -1,
-                 targets: str = "") -> dict:
+                 targets: str = "", workers: int = 8) -> dict:
     if not RAW_FILE.exists():
         log("run the search phase first")
         return {}
@@ -236,24 +257,37 @@ def phase_verify(budget: int, min_stars: int, recheck: bool = False, recheck_bel
         pending.sort(key=lambda r: (-(r.get("stargazers_count") or 0), r.get("size") or 0))
     log(f"{len(pending)} repositories pending verification")
 
+    # A token-backed Actions run has ample core quota. Run independent tree
+    # requests concurrently, while keeping the anonymous path conservative.
+    # The cache is only written by the main thread so interrupted runs remain
+    # valid JSON and can resume safely.
+    if budget <= 0 or rate_get("core_remaining") <= 2:
+        log("  [verify] budget/quota guard before starting")
+        return cache
+    batch = pending[:budget]
+    worker_count = max(1, min(int(workers or 1), len(batch), 16))
+    log(f"  [verify] checking {len(batch)} repositories with {worker_count} workers")
+
+    def work(repo):
+        try:
+            return repo, tree_skill_count(repo)
+        except Exception as exc:
+            log(f"  [verify] {repo['full_name']}: {type(exc).__name__}")
+            return repo, None
+
     checked = 0
-    for repo in pending:
-        if budget <= 0 or RATE["core_remaining"] <= 2:
-            log(f"  [verify] budget/quota guard after {checked} checks")
-            break
-        count = tree_skill_count(repo)
-        budget -= 1
-        if count is None:
-            cache[repo["full_name"]] = {"skillCount": None, "error": True,
-                                        "checkedAt": datetime.now(timezone.utc).isoformat()}
-            continue
-        cache[repo["full_name"]] = {"skillCount": count,
-                                    "checkedAt": datetime.now(timezone.utc).isoformat()}
-        checked += 1
-        if count:
-            log(f"  [verify] {repo['full_name']}: {count} SKILL.md")
-        if checked % 10 == 0:
-            CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        for repo, count in pool.map(work, batch):
+            checked += 1
+            cache[repo["full_name"]] = {
+                "skillCount": count,
+                "error": count is None,
+                "checkedAt": datetime.now(timezone.utc).isoformat(),
+            }
+            if count:
+                log(f"  [verify] {repo['full_name']}: {count} SKILL.md")
+            if checked % 10 == 0:
+                CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
 
     CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
     verified = sum(1 for v in cache.values() if (v.get("skillCount") or 0) > 0)
@@ -527,7 +561,7 @@ def main() -> int:
     parser.add_argument("--pages", type=int, default=2)
     parser.add_argument("--min-stars", type=int, default=3)
     parser.add_argument("--verify-budget", type=int, default=40)
-    parser.add_argument("--workers", type=int, default=10, help="parallel workers for the jsDelivr scan")
+    parser.add_argument("--workers", type=int, default=10, help="parallel workers for verification and jsDelivr scan")
     parser.add_argument("--recheck", action="store_true", help="ignore cached verification results")
     parser.add_argument("--recheck-below", type=int, default=-1,
                         help="re-verify cached repos whose SKILL.md count is <= N")
@@ -540,7 +574,7 @@ def main() -> int:
         phase_search(args.pages, args.min_stars)
     if args.phase in ("verify", "all"):
         log("== phase: verify ==")
-        phase_verify(args.verify_budget, args.min_stars, args.recheck, args.recheck_below, args.targets)
+        phase_verify(args.verify_budget, args.min_stars, args.recheck, args.recheck_below, args.targets, args.workers)
     if args.phase in ("scan", "all"):
         log("== phase: scan (jsDelivr) ==")
         phase_scan(args.workers, args.min_stars)
